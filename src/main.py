@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.server.api.v1 import volume_profile
 from src.server.api.v1 import technical_analysis_api
+from src.server.api.v1 import technical_zones
 from src.server.config import FININSIGHT_HOST, FININSIGHT_PORT
 
 app = FastAPI(
@@ -32,6 +33,7 @@ app.include_router(volume_profile.router, prefix="/api/v1", tags=["Volume Profil
 
 app.include_router(technical_analysis_api.router, prefix="/api/v1", tags=["Technical Analysis"])
 
+app.include_router(technical_zones.router, prefix="/api/v1", tags=["Technical Zones"])
 
 @app.get("/")
 async def read_root():

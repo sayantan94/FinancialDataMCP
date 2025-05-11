@@ -34,3 +34,5 @@ TA_5M_INDICATOR_INTERVAL: str = "15min"
 VP_1D_BARS_INTERVAL: str = "1h"     # 1h bars over several months
 VP_1D_LOOKBACK_MONTHS: int = 3      # Recent quarter structure
 TA_1D_INDICATOR_INTERVAL: str = "1day"
+
+PRICE_BANDING_WIDTH: float = 0.01

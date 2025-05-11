@@ -1,0 +1,56 @@
+[
+  {
+    "toolSpec": {
+      "name": "financial_volume_profile",
+      "description": "Retrieves Volume Profile structure (POC, VAH, VAL, Nodes) for default granular timeframes (1m, 5m). Useful for identifying key support and resistance levels based on volume distribution.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "The stock ticker symbol (e.g., SPY, AAPL)."
+            }
+          },
+          "required": ["symbol"]
+        }
+      }
+    }
+  },
+  {
+    "toolSpec": {
+      "name": "financial_technical_analysis",
+      "description": "Retrieves standard Technical Analysis indicator values (e.g., SMA, RSI, MACD, ATR, VWAP) for default granular timeframes (1m, 5m, 1d). Useful for assessing trend, momentum, and volatility.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "The stock ticker symbol (e.g., SPY, AAPL)."
+            }
+          },
+          "required": ["symbol"]
+        }
+      }
+    }
+  },
+  {
+    "toolSpec": {
+      "name": "financial_technical_zones",
+      "description": "Retrieves calculated high-probability support and resistance price zones derived from methods like Volume Profile and volatility extensions for default granular timeframes (1m, 5m). Useful for identifying precise entry, exit, and stop-loss levels.",
+      "inputSchema": {
+        "json": {
+          "type": "object",
+          "properties": {
+            "symbol": {
+              "type": "string",
+              "description": "The stock ticker symbol (e.g., SPY, AAPL)."
+            }
+          },
+          "required": ["symbol"]
+        }
+      }
+    }
+  }
+]
