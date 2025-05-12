@@ -149,6 +149,118 @@ def calculate_volume_profile(
     }
 
 
+def calculate_fibonacci_levels(
+        df: pd.DataFrame,
+        price_precision: int = 2
+) -> List[Dict[str, Any]]:
+    """
+    Calculates standard Fibonacci retracement and extension levels
+    based on the highest high and lowest low within the provided DataFrame.
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns.
+        price_precision: Decimal places for rounding prices.
+
+    Returns:
+        List of dictionaries representing the Fibonacci zones.
+    """
+    fib_zones: List[Dict[str, Any]] = []
+
+    if df is None or df.empty or not all(col in df.columns for col in ['high', 'low']):
+        print("Fibonacci calculation skipped: Input DataFrame is empty or lacks required columns (high, low).")
+        return fib_zones # Return empty list
+
+    # Find the highest high and lowest low within the DataFrame
+    highest_high = df['high'].max()
+    lowest_low = df['low'].min()
+
+    # Ensure valid prices and a price swing exists
+    if pd.isna(highest_high) or pd.isna(lowest_low) or highest_high <= lowest_low:
+        print(f"Fibonacci calculation skipped: Invalid price range ({lowest_low}-{highest_high}).")
+        return fib_zones # Return empty list
+
+    price_range = highest_high - lowest_low
+
+    # Define standard Fibonacci ratios
+    # Retracements: 0.382, 0.5, 0.618
+    # Extensions (Common): 1.0, 1.618
+    retracement_ratios = [0.618, 0.5, 0.382] # Order from higher to lower
+    extension_ratios = [1.0, 1.618] # Order from 100% upwards
+
+    # Determine swing direction for retracements
+    # If the last close is higher than the first open, assume an overall uptrend correction (draw Fibs from Low to High)
+    # If the last close is lower than the first open, assume an overall downtrend correction (draw Fibs from High to Low)
+    # This is a simple heuristic, more advanced methods use specific swing points.
+    # Let's use the direction of the overall move in the DF
+    first_price = df['open'].iloc[0]
+    last_price = df['close'].iloc[-1]
+    is_uptrend_correction = last_price > first_price
+
+    # Calculate Retracement Levels
+    for ratio in retracement_ratios:
+        if is_uptrend_correction:
+            # Price moved up, correcting down. Fibs from Low to High. Levels are Low + (Range * Ratio)
+            level = lowest_low + (price_range * ratio)
+            fib_zones.append({
+                "type": "SUPPORT", # Retracements in uptrend are support
+                "name": f"Fib Retracement {ratio*100:.1f}%",
+                "level": round(level, price_precision),
+                "source": "Fibonacci (Calculated)"
+            })
+        else:
+            # Price moved down, correcting up. Fibs from High to Low. Levels are High - (Range * Ratio)
+            level = highest_high - (price_range * ratio)
+            fib_zones.append({
+                "type": "RESISTANCE", # Retracements in downtrend are resistance
+                "name": f"Fib Retracement {ratio*100:.1f}%",
+                "level": round(level, price_precision),
+                "source": "Fibonacci (Calculated)"
+            })
+
+    # Sort retracements by price for cleaner output (highest to lowest for RESISTANCE, lowest to highest for SUPPORT)
+    fib_zones.sort(key=lambda x: x['level'], reverse=True if not is_uptrend_correction else False)
+
+
+    # Calculate Extension Levels (typically targets beyond the initial move)
+    # Simplest way: project from the High/Low of the move.
+    # A common way to use extensions is from the start of the move, to the end, and then the retracement point.
+    # Let's calculate from the endpoints of the move (High/Low) relative to the starting point.
+
+    # Using the High-Low swing endpoints for extensions
+    # Extension levels = High + (Range * Ratio) for uptrend continuation (Low->High move followed by potential break higher)
+    # Extension levels = Low - (Range * Ratio) for downtrend continuation (High->Low move followed by potential break lower)
+
+    # For simplicity, let's calculate extensions as projections from the 'end' of the swing
+    # based on the magnitude of the swing.
+    # If move was Low -> High: Levels = High + (Range * Ratio)
+    # If move was High -> Low: Levels = Low - (Range * Ratio)
+
+    swing_magnitude = abs(highest_high - lowest_low)
+
+    for ratio in extension_ratios:
+        if is_uptrend_correction: # Low -> High move
+            level = highest_high + (swing_magnitude * ratio)
+            fib_zones.append({
+                "type": "TARGET_UPSIDE",
+                "name": f"Fib Extension {ratio:.3f}",
+                "level": round(level, price_precision),
+                "source": "Fibonacci (Calculated)"
+            })
+        else: # High -> Low move
+            level = lowest_low - (swing_magnitude * ratio)
+            fib_zones.append({
+                "type": "TARGET_DOWNSIDE",
+                "name": f"Fib Extension {ratio:.3f}",
+                "level": round(level, price_precision),
+                "source": "Fibonacci (Calculated)"
+            })
+
+    # Sort extensions by price
+    fib_zones.sort(key=lambda x: x['level'], reverse=True if is_uptrend_correction else False)
+
+
+    return fib_zones
+
 # Example usage (for testing calculation logic outside the API)
 if __name__ == "__main__":
     # Ensure you have numpy and pandas installed
