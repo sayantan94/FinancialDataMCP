@@ -5,6 +5,7 @@ import concurrent.futures
 
 from src.server.config import TA_1M_INDICATOR_INTERVAL, TA_5M_INDICATOR_INTERVAL, TA_1D_INDICATOR_INTERVAL
 from src.server.data import twelvedata_fetcher
+from src.server.compute import technical_analysis  # Import our custom technical analysis calculations
 
 router = APIRouter()
 
@@ -59,6 +60,17 @@ def get_technical_analysis(
             print(f"Exception in {fetch_func.__name__} for {args}: {str(e)}")
             return "error", f"{fetch_func.__name__} exception: {str(e)}", None
 
+    def calculate_and_process_indicator(calc_func, category, key, *args):
+        """Helper function for calculated indicators (like Ichimoku) rather than fetched ones"""
+        try:
+            result = calc_func(*args)
+            if result is None:
+                return "error", f"{calc_func.__name__} calculation failed.", None
+            return "success", "", (category, key, result)
+        except Exception as e:
+            print(f"Exception in {calc_func.__name__} for {args}: {str(e)}")
+            return "error", f"{calc_func.__name__} exception: {str(e)}", None
+
     # Process a single timeframe with parallel indicator fetching
     def process_timeframe(timeframe_key, ta_indicator_interval, symbol):
         # --- Initialize TA data structure ---
@@ -66,12 +78,32 @@ def get_technical_analysis(
             "moving_averages": {},
             "oscillators": {},
             "volatility": {},
-            "vwap": {}
+            "vwap": {},
+            "ichimoku": {}
         }
 
         # Status for this specific timeframe: "success", "partial_success", "error", "warning"
         frame_status = "success"
         frame_message = "Data fetched."
+
+        # First, fetch time series data for custom calculations (like Ichimoku)
+        time_series_df = None
+        try:
+            # Fetch enough data for the longest indicator period (Ichimoku needs at least 52 periods)
+            # Using a larger outputsize to ensure we have enough data for calculation
+            time_series_df = twelvedata_fetcher.fetch_time_series(
+                symbol=symbol,
+                interval=ta_indicator_interval,
+                outputsize=100  # Enough data for Ichimoku calculations
+            )
+            if time_series_df is None or time_series_df.empty:
+                print(f"Warning: Failed to fetch time series data for {symbol} ({ta_indicator_interval})")
+                frame_status = "partial_success"
+                frame_message = f"Failed to fetch time series data for custom calculations."
+        except Exception as e:
+            print(f"Error fetching time series for {symbol} ({ta_indicator_interval}): {str(e)}")
+            frame_status = "partial_success"
+            frame_message = f"Error fetching time series: {str(e)}"
 
         # --- Define indicator tasks ---
         indicator_tasks = [
@@ -136,7 +168,7 @@ def get_technical_analysis(
                 "vwap",
                 None,
                 lambda result: {
-                    "value": float(result[-1].get('value', 0.0)),
+                    "value": float(result[-1].get('vwap', 0.0)),
                     "upper_band_1sd": None,
                     "lower_band_1sd": None
                 },
@@ -162,6 +194,19 @@ def get_technical_analysis(
                         ta_data[category] = value
                     else:
                         ta_data[category][key] = value
+
+        # Calculate Ichimoku Cloud if we have time series data
+        if time_series_df is not None and not time_series_df.empty:
+            try:
+                ichimoku_data = technical_analysis.calculate_ichimoku(time_series_df)
+                if ichimoku_data:
+                    ta_data["ichimoku"] = ichimoku_data
+                    results.append(("success", ""))
+                else:
+                    results.append(("warning", "Ichimoku calculation returned no data."))
+            except Exception as e:
+                print(f"Error calculating Ichimoku for {symbol} ({ta_indicator_interval}): {str(e)}")
+                results.append(("partial_success", f"Ichimoku calculation error: {str(e)}"))
 
         # Determine frame status and message based on results
         error_messages = [msg for status, msg in results if msg]

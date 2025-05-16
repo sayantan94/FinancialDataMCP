@@ -261,6 +261,97 @@ def calculate_fibonacci_levels(
 
     return fib_zones
 
+def calculate_ichimoku(
+        df: pd.DataFrame,
+        tenkan_period: int = 9,
+        kijun_period: int = 26,
+        senkou_span_b_period: int = 52,
+        price_precision: int = 2
+) -> Optional[Dict[str, Any]]:
+    """
+    Calculates Ichimoku Cloud components from historical price data.
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        tenkan_period: Period for Tenkan-sen (Conversion Line), default 9
+        kijun_period: Period for Kijun-sen (Base Line), default 26
+        senkou_span_b_period: Period for Senkou Span B (Leading Span B), default 52
+        price_precision: Decimal places for rounding prices
+
+    Returns:
+        Dictionary with Ichimoku components or None if calculation fails
+    """
+    # Ensure required columns exist and DataFrame has sufficient data
+    if df is None or df.empty or not all(col in df.columns for col in ['high', 'low', 'close']):
+        print("Ichimoku calculation skipped: Input DataFrame is empty or lacks required columns.")
+        return None
+
+    # Need at least the longest period for calculation
+    min_required_periods = max(tenkan_period, kijun_period, senkou_span_b_period)
+    if len(df) < min_required_periods:
+        print(f"Ichimoku calculation skipped: Input DataFrame has insufficient data ({len(df)} rows, need {min_required_periods}).")
+        return None
+
+    # Function to calculate a donchian channel midpoint (average of highest high and lowest low over n periods)
+    def donchian_midpoint(high_series, low_series, period):
+        highest_high = high_series.rolling(window=period).max()
+        lowest_low = low_series.rolling(window=period).min()
+        return (highest_high + lowest_low) / 2
+
+    # Calculate Tenkan-sen (Conversion Line) - 9-period midpoint
+    df['tenkan_sen'] = donchian_midpoint(df['high'], df['low'], tenkan_period)
+
+    # Calculate Kijun-sen (Base Line) - 26-period midpoint
+    df['kijun_sen'] = donchian_midpoint(df['high'], df['low'], kijun_period)
+
+    # Calculate Senkou Span A (Leading Span A) - Average of Tenkan-sen and Kijun-sen, shifted forward 26 periods
+    df['senkou_span_a'] = ((df['tenkan_sen'] + df['kijun_sen']) / 2).shift(kijun_period)
+
+    # Calculate Senkou Span B (Leading Span B) - 52-period midpoint, shifted forward 26 periods
+    df['senkou_span_b'] = donchian_midpoint(df['high'], df['low'], senkou_span_b_period).shift(kijun_period)
+
+    # Calculate Chikou Span (Lagging Span) - Current close, shifted backwards 26 periods
+    df['chikou_span'] = df['close'].shift(-kijun_period)
+
+    # Get the most recent values (last row)
+    last_row = df.iloc[-1]
+
+    # Determine cloud status (above/below/in cloud)
+    current_close = last_row['close']
+    # Check if Senkou Span A and B values are both available for the latest bar
+    if pd.notna(last_row['senkou_span_a']) and pd.notna(last_row['senkou_span_b']):
+        # Define upper and lower bounds of cloud
+        cloud_top = max(last_row['senkou_span_a'], last_row['senkou_span_b'])
+        cloud_bottom = min(last_row['senkou_span_a'], last_row['senkou_span_b'])
+
+        if current_close > cloud_top:
+            cloud_status = "bullish"  # Price above cloud
+        elif current_close < cloud_bottom:
+            cloud_status = "bearish"  # Price below cloud
+        else:
+            cloud_status = "neutral"  # Price inside cloud
+    else:
+        cloud_status = "unknown"  # Not enough data to determine
+
+    # Check if we have valid values for all components
+    components = ['tenkan_sen', 'kijun_sen', 'senkou_span_a', 'senkou_span_b', 'chikou_span']
+    valid_components = all(pd.notna(last_row[component]) for component in components)
+
+    if not valid_components:
+        print("Ichimoku calculation warning: Some components have NaN values.")
+
+    # Package results with proper formatting
+    ichimoku_data = {
+        "tenkan_sen": round(float(last_row['tenkan_sen']), price_precision) if pd.notna(last_row['tenkan_sen']) else None,
+        "kijun_sen": round(float(last_row['kijun_sen']), price_precision) if pd.notna(last_row['kijun_sen']) else None,
+        "senkou_span_a": round(float(last_row['senkou_span_a']), price_precision) if pd.notna(last_row['senkou_span_a']) else None,
+        "senkou_span_b": round(float(last_row['senkou_span_b']), price_precision) if pd.notna(last_row['senkou_span_b']) else None,
+        "chikou_span": round(float(last_row['chikou_span']), price_precision) if pd.notna(last_row['chikou_span']) else None,
+        "cloud_status": cloud_status
+    }
+
+    return ichimoku_data
+
 # Example usage (for testing calculation logic outside the API)
 if __name__ == "__main__":
     # Ensure you have numpy and pandas installed
@@ -323,3 +414,29 @@ if __name__ == "__main__":
     vp_result_nan = calculate_volume_profile(dummy_df_nan)
     print("\nVolume Profile (with NaNs):")
     print(vp_result_nan)
+
+    # Test Ichimoku Cloud calculation
+    # Create a larger dataset for proper Ichimoku testing
+    import numpy as np
+    dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
+    # Create sample price data with a clear trend
+    highs = np.linspace(100, 200, 100) + np.random.normal(0, 5, 100)
+    lows = np.linspace(90, 180, 100) + np.random.normal(0, 5, 100)
+    closes = np.linspace(95, 190, 100) + np.random.normal(0, 3, 100)
+
+    ichimoku_test_data = {
+        'datetime': dates,
+        'open': np.linspace(95, 190, 100),
+        'high': highs,
+        'low': lows,
+        'close': closes,
+        'volume': np.random.randint(1000, 5000, 100)
+    }
+
+    ichimoku_df = pd.DataFrame(ichimoku_test_data)
+
+    # Test Ichimoku Cloud calculation
+    ichimoku_result = calculate_ichimoku(ichimoku_df)
+    print("\nIchimoku Cloud Result:")
+    print(ichimoku_result)
+
