@@ -352,6 +352,422 @@ def calculate_ichimoku(
 
     return ichimoku_data
 
+def calculate_on_balance_volume(df: pd.DataFrame) -> float:
+    """
+    Calculates On-Balance Volume (OBV) from historical price/volume data.
+    OBV adds volume on up days and subtracts volume on down days.
+
+    Args:
+        df: DataFrame with 'close' and 'volume' columns
+
+    Returns:
+        Current OBV value as float
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['close', 'volume']):
+        print("OBV calculation skipped: Input DataFrame is empty or lacks required columns.")
+        return None
+
+    # Calculate daily price changes
+    df = df.copy()
+    df['price_change'] = df['close'].diff()
+
+    # Initialize OBV with first row's volume
+    obv = [0]
+
+    # Calculate OBV for each row after the first
+    for i in range(1, len(df)):
+        if df['price_change'].iloc[i] > 0:
+            obv.append(obv[-1] + df['volume'].iloc[i])
+        elif df['price_change'].iloc[i] < 0:
+            obv.append(obv[-1] - df['volume'].iloc[i])
+        else:
+            obv.append(obv[-1])
+
+    df['obv'] = obv
+
+    # Return latest OBV value
+    return float(df['obv'].iloc[-1])
+
+def calculate_chaikin_money_flow(df: pd.DataFrame, period: int = 20) -> float:
+    """
+    Calculates Chaikin Money Flow (CMF) which measures buying and selling pressure.
+    Positive CMF indicates buying pressure, negative indicates selling pressure.
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' and 'volume' columns
+        period: Lookback period for calculation, default 20
+
+    Returns:
+        Current CMF value as float
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['high', 'low', 'close', 'volume']):
+        print("CMF calculation skipped: Input DataFrame is empty or lacks required columns.")
+        return None
+
+    if len(df) < period:
+        print(f"CMF calculation skipped: Input DataFrame has insufficient data ({len(df)} rows, need {period}).")
+        return None
+
+    df = df.copy()
+
+    # Money Flow Multiplier: ((Close - Low) - (High - Close)) / (High - Low)
+    df['high_low_range'] = df['high'] - df['low']
+    df.loc[df['high_low_range'] == 0, 'high_low_range'] = 0.001  # Avoid division by zero
+
+    df['money_flow_multiplier'] = ((df['close'] - df['low']) - (df['high'] - df['close'])) / df['high_low_range']
+
+    # Money Flow Volume: Money Flow Multiplier * Volume
+    df['money_flow_volume'] = df['money_flow_multiplier'] * df['volume']
+
+    # Chaikin Money Flow: Sum of Money Flow Volume over period / Sum of Volume over period
+    df['cmf'] = df['money_flow_volume'].rolling(window=period).sum() / df['volume'].rolling(window=period).sum()
+
+    # Return latest CMF value
+    return float(df['cmf'].iloc[-1]) if pd.notna(df['cmf'].iloc[-1]) else 0.0
+
+def calculate_volume_price_trend(df: pd.DataFrame) -> float:
+    """
+    Calculates Volume Price Trend (VPT), a volume-based indicator that shows
+    the balance between demand and supply.
+
+    Args:
+        df: DataFrame with 'close' and 'volume' columns
+
+    Returns:
+        Current VPT value as float
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['close', 'volume']):
+        print("VPT calculation skipped: Input DataFrame is empty or lacks required columns.")
+        return None
+
+    df = df.copy()
+
+    # Calculate percentage price change
+    df['price_change_pct'] = df['close'].pct_change()
+
+    # Initialize VPT with first non-NaN row's volume
+    vpt = [0]
+
+    # Calculate VPT for each row after the first
+    for i in range(1, len(df)):
+        if pd.notna(df['price_change_pct'].iloc[i]):
+            vpt.append(vpt[-1] + df['volume'].iloc[i] * df['price_change_pct'].iloc[i])
+        else:
+            vpt.append(vpt[-1])
+
+    df['vpt'] = vpt
+
+    # Return latest VPT value
+    return float(df['vpt'].iloc[-1])
+
+def calculate_buying_pressure(df: pd.DataFrame, lookback: int = 10) -> Dict[str, float]:
+    """
+    Analyzes volume distribution on up vs down bars to determine buying pressure.
+
+    Args:
+        df: DataFrame with 'close' and 'volume' columns
+        lookback: Number of bars to analyze for trend
+
+    Returns:
+        Dictionary with buying pressure metrics
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['close', 'volume']):
+        print("Buying pressure calculation skipped: Input DataFrame is empty or lacks required columns.")
+        return None
+
+    if len(df) < lookback:
+        print(f"Buying pressure calculation skipped: Insufficient data ({len(df)} rows, need {lookback}).")
+        return None
+
+    df = df.copy()
+    df['price_change'] = df['close'].diff()
+
+    # Analyze only the most recent bars within lookback period
+    recent_df = df.tail(lookback)
+
+    # Calculate up and down volume
+    up_volume = recent_df.loc[recent_df['price_change'] > 0, 'volume'].sum()
+    down_volume = recent_df.loc[recent_df['price_change'] < 0, 'volume'].sum()
+    total_volume = recent_df['volume'].sum()
+
+    # Calculate volume ratios
+    up_volume_ratio = up_volume / total_volume if total_volume > 0 else 0
+    down_volume_ratio = down_volume / total_volume if total_volume > 0 else 0
+
+    # Calculate average volume on up vs down days
+    avg_up_volume = recent_df.loc[recent_df['price_change'] > 0, 'volume'].mean() if len(recent_df.loc[recent_df['price_change'] > 0]) > 0 else 0
+    avg_down_volume = recent_df.loc[recent_df['price_change'] < 0, 'volume'].mean() if len(recent_df.loc[recent_df['price_change'] < 0]) > 0 else 0
+
+    # Volume strength ratio (avg volume on up days / avg volume on down days)
+    volume_strength_ratio = avg_up_volume / avg_down_volume if avg_down_volume > 0 else float('inf')
+
+    return {
+        "up_volume_ratio": float(up_volume_ratio),
+        "down_volume_ratio": float(down_volume_ratio),
+        "volume_strength_ratio": float(volume_strength_ratio),
+        "is_bullish_volume": bool(up_volume_ratio > 0.6 or volume_strength_ratio > 1.5)
+    }
+
+def identify_large_volume_bars(df: pd.DataFrame, threshold: float = 1.5) -> List[Dict[str, Any]]:
+    """
+    Identifies unusually large volume bars that often precede continuation moves.
+
+    Args:
+        df: DataFrame with 'volume' and 'close' columns
+        threshold: Multiple of average volume to consider 'large'
+
+    Returns:
+        List of dictionaries with details of large volume bars
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['close', 'volume']):
+        print("Large volume bar detection skipped: Input DataFrame is empty or lacks required columns.")
+        return []
+
+    if len(df) < 5:  # Need at least a few bars to establish average
+        print(f"Large volume bar detection skipped: Insufficient data ({len(df)} rows).")
+        return []
+
+    df = df.copy()
+
+    # Calculate average volume (excluding the current bar)
+    avg_volume = df['volume'].iloc[:-1].mean()
+
+    # Identify large volume bars
+    large_bars = []
+    lookback = min(10, len(df))  # Look at the most recent 10 bars
+
+    for i in range(len(df) - lookback, len(df)):
+        if df['volume'].iloc[i] > avg_volume * threshold:
+            # Determine if it's a bullish or bearish volume bar
+            price_change = df['close'].iloc[i] - df['close'].iloc[i-1] if i > 0 else 0
+            bar_type = "bullish" if price_change > 0 else "bearish"
+
+            large_bars.append({
+                "bar_index": i,
+                "datetime": df.index[i].isoformat() if isinstance(df.index, pd.DatetimeIndex) else str(i),
+                "volume": float(df['volume'].iloc[i]),
+                "volume_ratio": float(df['volume'].iloc[i] / avg_volume),
+                "type": bar_type
+            })
+
+    return large_bars
+
+def calculate_volume_momentum_indicators(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Comprehensive function to calculate multiple volume-based momentum indicators.
+
+    Args:
+        df: DataFrame with OHLCV data
+
+    Returns:
+        Dictionary with volume momentum indicators
+    """
+    if df is None or df.empty:
+        return {}
+
+    result = {}
+
+    # Calculate OBV
+    obv = calculate_on_balance_volume(df)
+    if obv is not None:
+        result["obv"] = obv
+
+    # Calculate CMF
+    cmf = calculate_chaikin_money_flow(df)
+    if cmf is not None:
+        result["cmf"] = cmf
+
+    # Calculate VPT
+    vpt = calculate_volume_price_trend(df)
+    if vpt is not None:
+        result["vpt"] = vpt
+
+    # Calculate Buying Pressure
+    buying_pressure = calculate_buying_pressure(df)
+    if buying_pressure is not None:
+        result["buying_pressure"] = buying_pressure
+
+    # Identify Large Volume Bars
+    large_volume_bars = identify_large_volume_bars(df)
+    if large_volume_bars:
+        result["large_volume_bars"] = large_volume_bars
+
+    return result
+
+def calculate_trend_strength(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Calculates various trend strength metrics.
+
+    Args:
+        df: DataFrame with OHLCV data
+
+    Returns:
+        Dictionary with trend strength metrics
+    """
+    if df is None or df.empty or not all(col in df.columns for col in ['high', 'low', 'close']):
+        return {}
+
+    result = {}
+
+    # Calculate ADX (Average Directional Index)
+    # This is a simplified calculation - consider using a library for production
+    try:
+        # Make a deep copy of the dataframe to avoid SettingWithCopyWarning
+        temp_df = df.copy(deep=True)
+
+        # Calculate True Range
+        temp_df['tr1'] = abs(temp_df['high'] - temp_df['low'])
+        temp_df['tr2'] = abs(temp_df['high'] - temp_df['close'].shift(1))
+        temp_df['tr3'] = abs(temp_df['low'] - temp_df['close'].shift(1))
+        temp_df['tr'] = temp_df[['tr1', 'tr2', 'tr3']].max(axis=1)
+
+        # Initialize +DM and -DM columns with zeros
+        temp_df['plus_dm'] = 0.0
+        temp_df['minus_dm'] = 0.0
+
+        # Create temporary columns to avoid loop
+        high_diff = temp_df['high'].diff()
+        low_diff = temp_df['low'].diff().multiply(-1)  # Invert for easier comparison
+
+        # Calculate +DM: if high_diff > low_diff and high_diff > 0, use high_diff, else 0
+        temp_df['plus_dm'] = np.where(
+            (high_diff > low_diff) & (high_diff > 0),
+            high_diff,
+            0.0
+        )
+
+        # Calculate -DM: if low_diff > high_diff and low_diff > 0, use low_diff, else 0
+        temp_df['minus_dm'] = np.where(
+            (low_diff > high_diff) & (low_diff > 0),
+            low_diff,
+            0.0
+        )
+
+        # Calculate smoothed TR and DM over 14 periods
+        period = 14
+        temp_df['smoothed_tr'] = temp_df['tr'].rolling(window=period).sum()
+        temp_df['smoothed_plus_dm'] = temp_df['plus_dm'].rolling(window=period).sum()
+        temp_df['smoothed_minus_dm'] = temp_df['minus_dm'].rolling(window=period).sum()
+
+        # Calculate +DI and -DI
+        temp_df['plus_di'] = 100 * temp_df['smoothed_plus_dm'] / temp_df['smoothed_tr']
+        temp_df['minus_di'] = 100 * temp_df['smoothed_minus_dm'] / temp_df['smoothed_tr']
+
+        # Calculate DX and ADX
+        temp_df['dx'] = 100 * abs(temp_df['plus_di'] - temp_df['minus_di']) / (temp_df['plus_di'] + temp_df['minus_di'])
+        temp_df['adx'] = temp_df['dx'].rolling(window=period).mean()
+
+        # Get latest ADX value
+        adx_value = float(temp_df['adx'].iloc[-1]) if pd.notna(temp_df['adx'].iloc[-1]) else 0.0
+        result['adx'] = adx_value
+        result['trend_strength'] = "strong" if adx_value > 25 else "weak"
+    except Exception as e:
+        print(f"Error calculating ADX: {str(e)}")
+
+    # Calculate slope of EMA20
+    try:
+        # First calculate EMA20
+        ema20 = df['close'].ewm(span=20, adjust=False).mean()
+
+        # Calculate slope over last 5 periods
+        lookback = 5
+        if len(ema20) >= lookback:
+            y_values = ema20.tail(lookback).values
+            x_values = np.arange(lookback)
+            slope, _ = np.polyfit(x_values, y_values, 1)
+            result['ema20_slope'] = float(slope)
+            result['ema20_slope_direction'] = "up" if slope > 0 else "down"
+    except Exception as e:
+        print(f"Error calculating EMA slope: {str(e)}")
+
+    # Calculate price distance from moving averages
+    try:
+        # Calculate SMA50
+        sma50 = df['close'].rolling(window=50).mean()
+
+        # Get current price and SMA50
+        current_price = df['close'].iloc[-1]
+        latest_sma50 = sma50.iloc[-1]
+
+        # Calculate distance as percentage
+        if pd.notna(latest_sma50) and latest_sma50 > 0:
+            distance_pct = (current_price / latest_sma50 - 1) * 100
+            result['price_distance_from_sma50'] = float(distance_pct)
+    except Exception as e:
+        print(f"Error calculating price distance: {str(e)}")
+
+    return result
+
+def detect_divergences(price_df: pd.DataFrame, lookback: int = 14) -> Dict[str, Any]:
+    """
+    Detects potential divergences between price and momentum indicators.
+    Bullish divergence: Lower price lows but higher indicator lows
+    Bearish divergence: Higher price highs but lower indicator highs
+
+    Args:
+        price_df: DataFrame with OHLCV data
+        lookback: Number of bars to analyze for divergence
+
+    Returns:
+        Dictionary with divergence information
+    """
+    if price_df is None or price_df.empty or not all(col in price_df.columns for col in ['close']):
+        return {}
+
+    if len(price_df) < lookback:
+        return {}
+
+    df = price_df.copy()
+
+    # Calculate RSI
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+
+    rs = avg_gain / avg_loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    # Look for price lows and highs in recent data
+    recent_df = df.tail(lookback)
+
+    # Find local minima and maxima
+    price_lows = []
+    price_highs = []
+    rsi_at_price_lows = []
+    rsi_at_price_highs = []
+
+    for i in range(1, len(recent_df) - 1):
+        # Check for price low
+        if recent_df['close'].iloc[i] < recent_df['close'].iloc[i-1] and recent_df['close'].iloc[i] < recent_df['close'].iloc[i+1]:
+            price_lows.append(recent_df['close'].iloc[i])
+            rsi_at_price_lows.append(recent_df['rsi'].iloc[i])
+
+        # Check for price high
+        if recent_df['close'].iloc[i] > recent_df['close'].iloc[i-1] and recent_df['close'].iloc[i] > recent_df['close'].iloc[i+1]:
+            price_highs.append(recent_df['close'].iloc[i])
+            rsi_at_price_highs.append(recent_df['rsi'].iloc[i])
+
+    result = {}
+
+    # Detect bullish divergence (price making lower lows but RSI making higher lows)
+    if len(price_lows) >= 2 and len(rsi_at_price_lows) >= 2:
+        if price_lows[-1] < price_lows[-2] and rsi_at_price_lows[-1] > rsi_at_price_lows[-2]:
+            result['bullish_divergence'] = True
+        else:
+            result['bullish_divergence'] = False
+
+    # Detect bearish divergence (price making higher highs but RSI making lower highs)
+    if len(price_highs) >= 2 and len(rsi_at_price_highs) >= 2:
+        if price_highs[-1] > price_highs[-2] and rsi_at_price_highs[-1] < rsi_at_price_highs[-2]:
+            result['bearish_divergence'] = True
+        else:
+            result['bearish_divergence'] = False
+
+    return result
+
 # Example usage (for testing calculation logic outside the API)
 if __name__ == "__main__":
     # Ensure you have numpy and pandas installed

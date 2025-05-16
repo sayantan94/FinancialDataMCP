@@ -79,7 +79,10 @@ def get_technical_analysis(
             "oscillators": {},
             "volatility": {},
             "vwap": {},
-            "ichimoku": {}
+            "ichimoku": {},
+            "volume_indicators": {},
+            "trend_strength": {},
+            "divergences": {}
         }
 
         # Status for this specific timeframe: "success", "partial_success", "error", "warning"
@@ -100,6 +103,28 @@ def get_technical_analysis(
                 print(f"Warning: Failed to fetch time series data for {symbol} ({ta_indicator_interval})")
                 frame_status = "partial_success"
                 frame_message = f"Failed to fetch time series data for custom calculations."
+            else:
+                try:
+                    volume_indicators = technical_analysis.calculate_volume_momentum_indicators(time_series_df)
+                    if volume_indicators:
+                        ta_data["volume_indicators"] = volume_indicators
+                except Exception as e:
+                    print(f"Warning: Failed to calculate volume indicators for {symbol} ({ta_indicator_interval}): {str(e)}")
+
+                try:
+                    trend_strength = technical_analysis.calculate_trend_strength(time_series_df)
+                    if trend_strength:
+                        ta_data["trend_strength"] = trend_strength
+                except Exception as e:
+                    print(f"Warning: Failed to calculate trend strength for {symbol} ({ta_indicator_interval}): {str(e)}")
+
+                try:
+                    divergences = technical_analysis.detect_divergences(time_series_df)
+                    if divergences:
+                        ta_data["divergences"] = divergences
+                except Exception as e:
+                    print(f"Warning: Failed to detect divergences for {symbol} ({ta_indicator_interval}): {str(e)}")
+
         except Exception as e:
             print(f"Error fetching time series for {symbol} ({ta_indicator_interval}): {str(e)}")
             frame_status = "partial_success"
@@ -173,7 +198,7 @@ def get_technical_analysis(
                     "lower_band_1sd": None
                 },
                 symbol, ta_indicator_interval
-            )
+            ),
         ]
 
         # --- Execute all indicator tasks in parallel ---
@@ -207,6 +232,79 @@ def get_technical_analysis(
             except Exception as e:
                 print(f"Error calculating Ichimoku for {symbol} ({ta_indicator_interval}): {str(e)}")
                 results.append(("partial_success", f"Ichimoku calculation error: {str(e)}"))
+
+        try:
+            # Compile factors that suggest continued upside despite overbought readings
+            uptrend_continuation_factors = []
+
+            # Check volume indicators (if available)
+            if "volume_indicators" in ta_data and ta_data["volume_indicators"]:
+                vol_indicators = ta_data["volume_indicators"]
+
+                # Check if OBV is positive (bullish)
+                if "obv" in vol_indicators and vol_indicators["obv"] > 0:
+                    uptrend_continuation_factors.append("positive_obv")
+
+                # Check if CMF is positive (bullish)
+                if "cmf" in vol_indicators and vol_indicators["cmf"] > 0:
+                    uptrend_continuation_factors.append("positive_cmf")
+
+                # Check buying pressure
+                if "buying_pressure" in vol_indicators and vol_indicators["buying_pressure"].get("is_bullish_volume", False):
+                    uptrend_continuation_factors.append("bullish_volume_pattern")
+
+                # Check large volume bars
+                if "large_volume_bars" in vol_indicators:
+                    bullish_bars = [bar for bar in vol_indicators["large_volume_bars"] if bar["type"] == "bullish"]
+                    if bullish_bars:
+                        uptrend_continuation_factors.append("bullish_volume_spikes")
+
+            # Check trend strength
+            if "trend_strength" in ta_data and ta_data["trend_strength"]:
+                ts = ta_data["trend_strength"]
+
+                # Strong ADX suggests trend likely to continue
+                if "adx" in ts and ts["adx"] > 25:
+                    uptrend_continuation_factors.append("strong_adx")
+
+                # Positive EMA slope suggests uptrend
+                if "ema20_slope" in ts and ts["ema20_slope"] > 0:
+                    uptrend_continuation_factors.append("rising_ema")
+
+                # Price well above moving average suggests strong trend
+                if "price_distance_from_sma50" in ts and ts["price_distance_from_sma50"] > 3:
+                    uptrend_continuation_factors.append("price_above_ma")
+
+            # Check divergences
+            if "divergences" in ta_data and ta_data["divergences"]:
+                if ta_data["divergences"].get("bullish_divergence", False):
+                    uptrend_continuation_factors.append("bullish_divergence")
+
+            # Check ichimoku (if available)
+            if "ichimoku" in ta_data and ta_data["ichimoku"]:
+                if ta_data["ichimoku"].get("cloud_status") == "bullish":
+                    uptrend_continuation_factors.append("bullish_ichimoku")
+
+            # Overall MACD condition
+            if "oscillators" in ta_data and "macd" in ta_data["oscillators"]:
+                macd = ta_data["oscillators"]["macd"]
+                if macd.get("line", 0) > 0 and macd.get("histogram", 0) > 0:
+                    uptrend_continuation_factors.append("positive_macd")
+
+            # Calculate uptrend probability based on factors
+            uptrend_factor_count = len(uptrend_continuation_factors)
+            max_possible_factors = 9  # Total possible factors we check
+            uptrend_probability = min(uptrend_factor_count / max_possible_factors * 100, 100)
+
+            # Add to response
+            ta_data["continuation_analysis"] = {
+                "uptrend_continuation_probability": uptrend_probability,
+                "uptrend_continuation_factors": uptrend_continuation_factors,
+                "overbought_may_continue": uptrend_probability > 60
+            }
+
+        except Exception as e:
+            print(f"Error calculating uptrend continuation probability: {str(e)}")
 
         # Determine frame status and message based on results
         error_messages = [msg for status, msg in results if msg]
@@ -282,12 +380,49 @@ def get_technical_analysis(
     elif overall_status == "success":
         overall_message = "All timeframes processed successfully."
 
+    supporting_timeframes = []
+    for timeframe_key, timeframe_data in timeframe_technical_analysis.items():
+        if "technical_analysis" in timeframe_data and "continuation_analysis" in timeframe_data["technical_analysis"]:
+            continuation_analysis = timeframe_data["technical_analysis"]["continuation_analysis"]
+            if continuation_analysis.get("overbought_may_continue", False):
+                supporting_timeframes.append(timeframe_key)
+
+    # Calculate confidence level
+    confidence_level = "high" if len(supporting_timeframes) >= 2 else "medium" if len(supporting_timeframes) == 1 else "low"
+
+    # Identify shared factors across timeframes
+    shared_factors = []
+    if supporting_timeframes:
+        # Get factors from first supporting timeframe as baseline
+        baseline_timeframe = supporting_timeframes[0]
+        baseline_factors = timeframe_technical_analysis[baseline_timeframe]["technical_analysis"]["continuation_analysis"].get("uptrend_continuation_factors", [])
+
+        # Check if factors appear in all supporting timeframes
+        for factor in baseline_factors:
+            factor_in_all = True
+            for tf in supporting_timeframes[1:]:
+                tf_factors = timeframe_technical_analysis[tf]["technical_analysis"]["continuation_analysis"].get("uptrend_continuation_factors", [])
+                if factor not in tf_factors:
+                    factor_in_all = False
+                    break
+
+            if factor_in_all and factor not in shared_factors:
+                shared_factors.append(factor)
+
+    consolidated_analysis = {
+        "supports_continued_upside": len(supporting_timeframes) > 0,
+        "supporting_timeframes": supporting_timeframes,
+        "confidence": confidence_level,
+        "common_factors": shared_factors
+    }
+
     response_data: Dict[str, Any] = {
         "symbol": symbol,
         "timestamp_utc": response_time_utc.isoformat() + 'Z',
         "status": overall_status,
         "message": overall_message,
-        "timeframe_technical_analysis": timeframe_technical_analysis
+        "timeframe_technical_analysis": timeframe_technical_analysis,
+        "consolidated_analysis": consolidated_analysis
     }
 
     return response_data

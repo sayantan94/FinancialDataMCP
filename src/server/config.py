@@ -23,7 +23,7 @@ TWELVE_DATA_OUTPUT_SIZE: int = 5000
 # === 1-Minute Timeframe (Scalping / 0DTE Setup) ===
 VP_1M_BARS_INTERVAL: str = "1min"
 VP_1M_LOOKBACK_HOURS: int = 8       # Covers full trading day with buffer
-TA_1M_INDICATOR_INTERVAL: str = "5min"
+TA_1M_INDICATOR_INTERVAL: str = "1min"
 
 # === 5-Minute Timeframe (Intraday / 2-3DTE Setup) ===
 VP_5M_BARS_INTERVAL: str = "5min"
